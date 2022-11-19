@@ -1,0 +1,7 @@
+* Find a workflow engine
+* Build flows for
+  * create customer
+  * enable/disable customer
+  * deposit
+  * withdraw
+  * transfer
