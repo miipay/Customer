@@ -1,7 +1,17 @@
-* Find a workflow engine
+* Find a workflow engine, possible: jBPM, bpmn-server
 * Build flows for
   * create customer
   * enable/disable customer
   * deposit
   * withdraw
   * transfer
+
+
+Customer --> Workflow Engine --> Workflow Database
+    |
+    |===> Customer Database
+
+
+Create reqeust -> Customer -> customer database (reviewing)  
+                           -> customer review workflow ------> update customer database (reviewed)
+                           
