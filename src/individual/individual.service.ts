@@ -1,10 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { FilterOperator, paginate, Paginated, PaginateQuery } from 'nestjs-paginate';
-import { InsertResult, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { CreateIndividualDto, UpdateIndividualDto } from './individual.dto';
 import { IndividualCustomer, IndividualCustomerReview } from './individual.entity';
 import { ReviewResult } from './interfaces';
+import { safeMerge } from './utils/customerUtils';
+import { withTransaction } from './utils/orm';
+import { createIndividualCustomerReview, cancelIndividualCustomerReview } from './utils/workflows';
 
 type MutateResult = {
   customer: IndividualCustomer;
@@ -14,51 +17,32 @@ type MutateResult = {
 @Injectable()
 export class IndividualCustomerService {
   constructor(
+    @InjectDataSource() private dataSource: DataSource,
     @InjectRepository(IndividualCustomer) private customerRepository: Repository<IndividualCustomer>,
-    @InjectRepository(IndividualCustomerReview) private customerReviewRepository: Repository<IndividualCustomerReview>,
   ) {}
 
-  async create(customer: CreateIndividualDto): Promise<MutateResult> {
-    const result: InsertResult = await this.customerRepository.createQueryBuilder().insert().values(customer).execute();
-    const customerEntity = result.generatedMaps[0] as IndividualCustomer;
-    console.log('pump the create request to workflow', customer);
-    // TODO: create a workflow for customer review
-    const reviewResult: InsertResult = await this.customerReviewRepository
-      .createQueryBuilder()
-      .insert()
-      .values({
-        customer: customerEntity,
-        workflowId: 'test',
-        workflowURL: 'testURL',
-      })
-      .execute();
-    return {
-      customer: customerEntity,
-      review: reviewResult.generatedMaps[0] as IndividualCustomerReview,
-    };
+  async createCustomer(customer: CreateIndividualDto): Promise<MutateResult> {
+    return await withTransaction<MutateResult>(this.dataSource, async (manager: EntityManager) => {
+      const dataToInsert = manager.create(IndividualCustomer, { ...customer });
+      await manager.createQueryBuilder().insert().into(IndividualCustomer).values(dataToInsert).execute();
+      return {
+        customer: dataToInsert,
+        review: await createIndividualCustomerReview(manager, dataToInsert, { ...customer }),
+      };
+    });
   }
 
   async updateCustomer(id: number, updateRequest: UpdateIndividualDto): Promise<MutateResult> {
-    const customer = await this.customerRepository.findOneByOrFail({ id });
-    if (!customer.approved) {
-      // TODO: we should cancel the workflow and recreate a new create customer review.
-    }
-    console.log('pump the update request to workflow', updateRequest);
-    // TODO: create a workflow for customer review
-    const reviewResult = await this.customerReviewRepository
-      .createQueryBuilder()
-      .insert()
-      .values({
-        // TODO: try to find a way to do subquery to make sure there is only one active review under this customer.
-        customer,
-        workflowId: 'test',
-        workflowURL: 'testURL',
-      })
-      .execute();
-    return {
-      customer: customer,
-      review: reviewResult.generatedMaps[0] as IndividualCustomerReview,
-    };
+    return await withTransaction<MutateResult>(this.dataSource, async (manager: EntityManager) => {
+      const customer = await manager.findOneByOrFail<IndividualCustomer>(IndividualCustomer, { id });
+      if (!customer.approved) {
+        await cancelIndividualCustomerReview(manager, customer);
+      }
+      return {
+        customer: customer,
+        review: await createIndividualCustomerReview(manager, customer, { ...updateRequest }),
+      };
+    });
   }
 
   async enableCustomer(id: number, enabled: boolean): Promise<IndividualCustomer> {
@@ -67,19 +51,19 @@ export class IndividualCustomerService {
     return this.customerRepository.save(entity, { reload: true });
   }
 
-  async updateReviewResult(id: number, result: ReviewResult): Promise<void> {
-    const review = await this.customerReviewRepository.findOne({
-      where: { id },
-      relations: ['customer'],
+  async updateReviewResult(id: number, result: ReviewResult, originPayload: UpdateIndividualDto): Promise<void> {
+    await withTransaction<void>(this.dataSource, async (manager: EntityManager): Promise<void> => {
+      const review = await manager.findOne<IndividualCustomerReview>(IndividualCustomerReview, {
+        where: { id },
+        relations: ['customer'],
+      });
+      manager.merge<IndividualCustomerReview>(IndividualCustomerReview, review, {
+        reviewResult: result,
+        finished: true,
+      });
+      safeMerge(review.customer, originPayload);
+      manager.save([review, review.customer]);
     });
-    this.customerReviewRepository.merge(review, { reviewResult: result, finished: true });
-    this.customerReviewRepository.save(review, { reload: true });
-    await this.customerRepository
-      .createQueryBuilder()
-      .update()
-      .set({ approved: result.approved, approvedDate: result.approvedDate })
-      .where({ id: review.customer.id })
-      .execute();
   }
 
   findAll(query: PaginateQuery): Promise<Paginated<IndividualCustomer>> {

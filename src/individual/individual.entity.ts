@@ -70,6 +70,7 @@ export class IndividualCustomerReview {
   customer: IndividualCustomer;
 
   @Column({ length: 256 })
+  @Index({ unique: true })
   workflowId: string;
 
   @Column({ length: 2048 })

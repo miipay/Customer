@@ -22,7 +22,7 @@ export class UpdateIndividualDto {
   email: string;
   @IsLocalMobileNumber('country')
   @IsOptional()
-  mobile: string;
+  mobilePhone: string;
   @IsLocalPhoneNumber('country')
   @IsOptional()
   phoneNumber: string;
@@ -31,5 +31,5 @@ export class UpdateIndividualDto {
 export class CreateIndividualDto extends UpdateIndividualDto {
   @IsBoolean()
   @IsOptional()
-  enabled: boolean;
+  enabled?: boolean;
 }
